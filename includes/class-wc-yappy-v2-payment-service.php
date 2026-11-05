@@ -44,6 +44,8 @@ final class WC_Yappy_V2_Payment_Service {
             throw new WC_Yappy_V2_Exception( __( 'No fue posible iniciar el intento de pago. Intenta nuevamente.', 'woocommerce-yappy-v2' ) );
         }
 
+        $payment_requested = false;
+
         try {
             $auth    = $this->api->validate_merchant();
             $amounts = $this->amount_mapper->from_order( $order );
@@ -59,7 +61,8 @@ final class WC_Yappy_V2_Payment_Service {
                 $amounts
             );
 
-            $body = $this->api->create_payment( $payload, $auth['token'] );
+            $payment_requested = true;
+            $body              = $this->api->create_payment( $payload, $auth['token'] );
             $this->repo->mark_pending( $yappy_order_id, $body['transactionId'] );
 
             $order->update_meta_data( '_yappy_last_order_id', $yappy_order_id );
@@ -77,6 +80,12 @@ final class WC_Yappy_V2_Payment_Service {
                 'token'         => (string) $body['token'],
             );
         } catch ( WC_Yappy_V2_Exception $e ) {
+            // Yappy pudo haber creado la solicitud: el intento sigue en 'creating' para mantener el bloqueo de reintentos.
+            if ( $payment_requested && $e instanceof WC_Yappy_V2_Transport_Exception ) {
+                WC_Yappy_V2_Logger::log( 'error', 'Yappy payment creation unconfirmed', array( 'order' => $order->get_id(), 'yappy_order' => $yappy_order_id ) );
+                throw new WC_Yappy_V2_Exception( __( 'No pudimos confirmar la solicitud Yappy.', 'woocommerce-yappy-v2' ), 'UNCONFIRMED' );
+            }
+
             $this->repo->mark_error( $yappy_order_id, $e->get_yappy_code() );
             WC_Yappy_V2_Logger::log( 'error', 'Yappy payment creation failed', array( 'order' => $order->get_id(), 'yappy_order' => $yappy_order_id, 'code' => $e->get_yappy_code() ) );
             throw $e;
@@ -104,6 +113,7 @@ final class WC_Yappy_V2_Payment_Service {
             'E012' => __( 'Algo salió mal. Intenta nuevamente.', 'woocommerce-yappy-v2' ),
             'E100' => __( 'La solicitud enviada a Yappy no es válida.', 'woocommerce-yappy-v2' ),
             'ACTIVE'=> __( 'Ya existe una solicitud Yappy activa para este pedido.', 'woocommerce-yappy-v2' ),
+            'UNCONFIRMED' => __( 'No pudimos confirmar si la solicitud se creó. Revisa tu aplicación Yappy antes de intentar nuevamente.', 'woocommerce-yappy-v2' ),
         );
         return isset( $map[ $code ] ) ? $map[ $code ] : ( $fallback ?: __( 'No fue posible iniciar el pago con Yappy.', 'woocommerce-yappy-v2' ) );
     }

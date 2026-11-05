@@ -52,7 +52,7 @@ final class WC_Yappy_V2_API_Client {
 
         if ( is_wp_error( $response ) ) {
             WC_Yappy_V2_Logger::log( 'error', 'Yappy API transport error', array( 'path' => $path, 'error' => $response->get_error_message() ) );
-            throw new WC_Yappy_V2_Exception( __( 'No fue posible conectar con Yappy. Intenta nuevamente.', 'woocommerce-yappy-v2' ) );
+            throw new WC_Yappy_V2_Transport_Exception( __( 'No fue posible conectar con Yappy. Intenta nuevamente.', 'woocommerce-yappy-v2' ) );
         }
 
         $http_code = (int) wp_remote_retrieve_response_code( $response );
@@ -61,13 +61,16 @@ final class WC_Yappy_V2_API_Client {
 
         if ( ! is_array( $data ) ) {
             WC_Yappy_V2_Logger::log( 'error', 'Invalid JSON from Yappy', array( 'path' => $path, 'http_code' => $http_code ) );
-            throw new WC_Yappy_V2_Exception( __( 'Yappy devolvió una respuesta no válida.', 'woocommerce-yappy-v2' ) );
+            throw new WC_Yappy_V2_Transport_Exception( __( 'Yappy devolvió una respuesta no válida.', 'woocommerce-yappy-v2' ) );
         }
 
         if ( $http_code < 200 || $http_code >= 300 ) {
             $code        = $this->extract_status_code( $data );
             $description = $this->extract_status_description( $data );
             WC_Yappy_V2_Logger::log( 'error', 'Yappy API rejected request', array( 'path' => $path, 'http_code' => $http_code, 'yappy_code' => $code ) );
+            if ( $http_code >= 500 && ! $code ) {
+                throw new WC_Yappy_V2_Transport_Exception( $description ?: __( 'Yappy rechazó la solicitud.', 'woocommerce-yappy-v2' ), '', $http_code );
+            }
             throw new WC_Yappy_V2_Exception( $description ?: __( 'Yappy rechazó la solicitud.', 'woocommerce-yappy-v2' ), $code, $http_code );
         }
 

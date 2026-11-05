@@ -37,19 +37,26 @@
         if (data && data.paid) {
             setStatus('Pago confirmado.', 'success');
             if (redirectWhenPaid) window.location.href = data.redirect || cfg.redirectUrl;
-            return true;
+            return 'paid';
         }
         if (data && data.canRetry) {
             setStatus('La solicitud anterior finalizó. Puedes intentar pagar nuevamente con Yappy.', 'info');
+            return 'retry';
         }
-        return false;
+        return 'pending';
     }
 
     async function pollStatus() {
         for (var i = 0; i < 40; i++) {
+            var result = null;
             try {
-                if (await checkStatus(true)) return;
+                result = await checkStatus(true);
             } catch (e) {}
+            if (result === 'paid') return;
+            if (result === 'retry') {
+                button.isButtonLoading = false;
+                return;
+            }
             await new Promise(function (resolve) { setTimeout(resolve, 1500); });
         }
         button.isButtonLoading = false;
@@ -78,13 +85,15 @@
             var data = await response.json();
             if (!response.ok || !data || !data.transactionId || !data.documentName || !data.token) {
                 if (response.status === 409 && verifyButton) verifyButton.hidden = false;
-                throw new Error(parseError(response, data));
+                button.isButtonLoading = false;
+                setStatus(parseError(response, data), 'error');
+                return;
             }
             button.eventPayment({ transactionId: data.transactionId, documentName: data.documentName, token: data.token });
             setStatus('Confirma la solicitud en tu aplicación Yappy.', 'info');
         } catch (error) {
             button.isButtonLoading = false;
-            setStatus(error.message || cfg.messages.genericError, 'error');
+            setStatus(cfg.messages.genericError, 'error');
         }
     });
 
@@ -111,8 +120,8 @@
         verifyButton.addEventListener('click', async function () {
             verifyButton.disabled = true;
             try {
-                var paid = await checkStatus(true);
-                if (!paid) setStatus(cfg.messages.waiting, 'info');
+                var result = await checkStatus(true);
+                if (result === 'pending') setStatus(cfg.messages.waiting, 'info');
             } catch (e) {
                 setStatus(cfg.messages.genericError, 'error');
             } finally {

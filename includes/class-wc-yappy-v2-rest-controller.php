@@ -43,7 +43,7 @@ final class WC_Yappy_V2_REST_Controller {
             $result = ( new WC_Yappy_V2_Payment_Service() )->create_payment( $order, $alias );
             return rest_ensure_response( array_merge( array( 'success' => true ), $result ) );
         } catch ( WC_Yappy_V2_Exception $e ) {
-            $status = 'ACTIVE' === $e->get_yappy_code() ? 409 : 400;
+            $status = in_array( $e->get_yappy_code(), array( 'ACTIVE', 'UNCONFIRMED' ), true ) ? 409 : 400;
             return new WP_Error(
                 'wc_yappy_payment_error',
                 WC_Yappy_V2_Payment_Service::customer_message( $e->get_yappy_code(), $e->getMessage() ),
@@ -62,14 +62,14 @@ final class WC_Yappy_V2_REST_Controller {
             'success'  => true,
             'paid'     => $order->is_paid(),
             'status'   => $order->get_status(),
-            'canRetry' => $order->has_status( array( 'failed', 'cancelled' ) ),
+            'canRetry' => $order->needs_payment() && ! $this->repo->is_recent_active_attempt( $order->get_id() ),
             'redirect' => $order->is_paid() ? $order->get_checkout_order_received_url() : '',
         ) );
     }
 
     private function authorized_order( WP_REST_Request $request ) {
         $order = wc_get_order( absint( $request['order_id'] ) );
-        if ( ! $order ) {
+        if ( ! $order instanceof WC_Order ) {
             return new WP_Error( 'wc_yappy_order_not_found', __( 'Pedido no encontrado.', 'woocommerce-yappy-v2' ), array( 'status' => 404 ) );
         }
 
@@ -110,7 +110,20 @@ final class WC_Yappy_V2_REST_Controller {
             return new WP_Error( 'wc_yappy_unknown_order', 'Unknown order', array( 'status' => 404 ) );
         }
 
-        $order = wc_get_order( (int) $row['wc_order_id'] );
+        $order_id = (int) $row['wc_order_id'];
+        if ( ! $this->repo->lock_order( $order_id ) ) {
+            return new WP_Error( 'wc_yappy_order_busy', 'Order is being processed', array( 'status' => 503 ) );
+        }
+
+        try {
+            return $this->apply_ipn( $order_id, $row, $yappy_order_id, $status );
+        } finally {
+            $this->repo->unlock_order( $order_id );
+        }
+    }
+
+    private function apply_ipn( $order_id, array $row, $yappy_order_id, $status ) {
+        $order = wc_get_order( $order_id );
         if ( ! $order ) {
             return new WP_Error( 'wc_yappy_wc_order_missing', 'WooCommerce order not found', array( 'status' => 404 ) );
         }
@@ -129,15 +142,15 @@ final class WC_Yappy_V2_REST_Controller {
             }
 
             $transaction_id = ! empty( $row['transaction_id'] ) ? (string) $row['transaction_id'] : '';
-            $order->payment_complete( $transaction_id );
             $order->update_meta_data( '_yappy_last_order_id', $yappy_order_id );
             $order->update_meta_data( '_yappy_last_transaction_id', $transaction_id );
             $order->update_meta_data( '_yappy_last_status', 'E' );
             $order->update_meta_data( '_yappy_paid_order_id', $yappy_order_id );
-            $order->add_order_note( sprintf( __( 'Pago confirmado por Yappy. Yappy Order ID: %1$s. Transaction ID: %2$s.', 'woocommerce-yappy-v2' ), $yappy_order_id, $transaction_id ?: 'N/D' ) );
             $order->save();
+            $order->payment_complete( $transaction_id );
+            $order->add_order_note( sprintf( __( 'Pago confirmado por Yappy. Yappy Order ID: %1$s. Transaction ID: %2$s.', 'woocommerce-yappy-v2' ), $yappy_order_id, $transaction_id ?: 'N/D' ) );
             WC_Yappy_V2_Logger::log( 'info', 'Yappy payment completed', array( 'order' => $order->get_id(), 'yappy_order' => $yappy_order_id, 'transaction' => $transaction_id ) );
-        } elseif ( $latest && hash_equals( (string) $latest['yappy_order_id'], $yappy_order_id ) && ! $order->is_paid() ) {
+        } elseif ( $latest && hash_equals( (string) $latest['yappy_order_id'], $yappy_order_id ) && $order->needs_payment() ) {
             $labels = array( 'R' => __( 'rechazado', 'woocommerce-yappy-v2' ), 'C' => __( 'cancelado', 'woocommerce-yappy-v2' ), 'X' => __( 'expirado', 'woocommerce-yappy-v2' ) );
             $order->update_meta_data( '_yappy_last_status', $status );
             $order->update_status( 'failed', sprintf( __( 'Pago Yappy %s. Se puede iniciar un nuevo intento.', 'woocommerce-yappy-v2' ), $labels[ $status ] ) );

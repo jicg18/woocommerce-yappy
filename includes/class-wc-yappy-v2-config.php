@@ -31,12 +31,20 @@ final class WC_Yappy_V2_Config {
 
     public static function domain() {
         if ( defined( 'WC_YAPPY_DOMAIN' ) && WC_YAPPY_DOMAIN ) {
-            return untrailingslashit( esc_url_raw( (string) WC_YAPPY_DOMAIN ) );
+            return self::normalize_domain( (string) WC_YAPPY_DOMAIN );
         }
 
         $domain = trim( (string) self::get( 'domain', '' ) );
         if ( '' === $domain ) {
             $domain = home_url();
+        }
+        return self::normalize_domain( $domain );
+    }
+
+    private static function normalize_domain( $domain ) {
+        $domain = trim( $domain );
+        if ( ! preg_match( '#^https?://#i', $domain ) ) {
+            $domain = 'https://' . $domain;
         }
         return untrailingslashit( esc_url_raw( $domain ) );
     }

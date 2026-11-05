@@ -8,6 +8,20 @@ final class WC_Yappy_V2_Transaction_Repository {
         return $wpdb->prefix . 'wc_yappy_transactions';
     }
 
+    private function lock_name( $order_id ) {
+        return 'wc_yappy_' . md5( $this->table() . '|' . (int) $order_id );
+    }
+
+    public function lock_order( $order_id, $timeout = 10 ) {
+        global $wpdb;
+        return 1 === (int) $wpdb->get_var( $wpdb->prepare( 'SELECT GET_LOCK(%s, %d)', $this->lock_name( $order_id ), $timeout ) );
+    }
+
+    public function unlock_order( $order_id ) {
+        global $wpdb;
+        $wpdb->get_var( $wpdb->prepare( 'SELECT RELEASE_LOCK(%s)', $this->lock_name( $order_id ) ) );
+    }
+
     public function next_attempt_number( $order_id ) {
         global $wpdb;
         $max = $wpdb->get_var( $wpdb->prepare( 'SELECT MAX(attempt_no) FROM ' . $this->table() . ' WHERE wc_order_id = %d', $order_id ) );
